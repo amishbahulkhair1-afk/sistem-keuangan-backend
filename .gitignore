@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# Database files (database lokal tidak perlu masuk git)
+*.db
+*.sqlite3
+
+# Uploads directory (hanya simpan folder dengan .gitkeep)
+uploads/*
+!uploads/.gitkeep
+
+# Environment variables
+.env
+.env.local
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
