@@ -60,13 +60,13 @@ class DatabaseSeeder extends Seeder
 
         // 2. Seed Accounts
         $accounts = [
-            ['code' => 'kas_tunai', 'name' => 'Kas Tunai', 'initial_balance' => 1363000.0, 'current_balance' => 1363000.0],
-            ['code' => 'bank_bni', 'name' => 'Bank BNI 1946', 'initial_balance' => 11327838.85, 'current_balance' => 11327838.85],
-            ['code' => 'piutang', 'name' => 'Piutang', 'initial_balance' => 28371500.0, 'current_balance' => 28371500.0],
+            ['code' => 'kas_tunai', 'name' => 'Kas Tunai', 'initial_balance' => 0.0, 'current_balance' => 0.0],
+            ['code' => 'bank_bni', 'name' => 'Bank BNI 1946', 'initial_balance' => 0.0, 'current_balance' => 0.0],
+            ['code' => 'piutang', 'name' => 'Piutang', 'initial_balance' => 0.0, 'current_balance' => 0.0],
         ];
 
         foreach ($accounts as $acc) {
-            Account::firstOrCreate(['code' => $acc['code']], $acc);
+            Account::updateOrCreate(['code' => $acc['code']], $acc);
         }
 
         // 3. Seed Program Categories
