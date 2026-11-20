@@ -192,6 +192,7 @@ class PosTransactionController extends Controller
                 'supplier_or_source' => $request->recipient_or_sender ? trim($request->recipient_or_sender) : null,
                 'usage_for' => "Pembelian material via Kas Pos (" . ($request->description ?: $matToRecord->name) . ")",
                 'source_pos_tx_id' => $pt->id,
+                'photo_path' => $photoPath,
             ]);
 
             $matToRecord->increment('current_stock', $qty);
