@@ -261,50 +261,15 @@ class ReportController extends Controller
         $totPiutangBayar = (float) $debts->where('type', 'piutang_bayar')->sum('amount');
         $sisaPiutang = $totPiutangPinjam - $totPiutangBayar;
 
-        // Materials & Inventory
-        $materials = MaterialItem::where('category_id', $categoryId)->get();
-        $totalAsetMaterial = (float) $materials->sum(function ($m) {
-            return (float) $m->current_stock * (float) $m->unit_price;
-        });
-
-        // Expenses breakdown from PosTransaction
-        $upahTukang = (float) $posTxs->where('type', 'expense')->where('category_tx_type', 'upah_tukang')->sum('amount');
-        $operasionalLapangan = (float) $posTxs->where('type', 'expense')->where('category_tx_type', 'operasional_lapangan')->sum('amount');
-        $sewaAlat = (float) $posTxs->where('type', 'expense')->where('category_tx_type', 'sewa_alat')->sum('amount');
-        $biayaUmum = (float) $posTxs->where('type', 'expense')->where('category_tx_type', 'biaya_umum')->sum('amount');
-        $biayaPakaiMaterial = (float) MaterialTransaction::where('category_id', $categoryId)->where('type', 'keluar')->sum('total_price');
-
-        $knownExpenseTypes = ['upah_tukang', 'operasional_lapangan', 'sewa_alat', 'biaya_umum', 'belanja_material', 'hutang_bayar', 'piutang_pinjam'];
-        $otherExpense = (float) $posTxs->where('type', 'expense')->whereNotIn('category_tx_type', $knownExpenseTypes)->sum('amount');
-
         // Custom items
         $customItems = CustomBalanceSheetItem::where('category_id', $categoryId)->get();
 
         $aktivaHartaLancar = [
             ['code' => 'K.K', 'name' => "Kas Operasional Pos ({$cat->name})", 'amount' => (float) $sisaKasPos, 'is_auto' => true],
             ['code' => 'P.U', 'name' => 'Piutang ke Pihak Lain', 'amount' => (float) $sisaPiutang, 'is_auto' => true],
-            ['code' => 'P.M', 'name' => 'Persediaan Aset Material Lapangan', 'amount' => (float) $totalAsetMaterial, 'is_auto' => true],
         ];
 
         $aktivaBiaya = [];
-        if ($upahTukang > 0) {
-            $aktivaBiaya[] = ['code' => 'B.TK', 'name' => 'Biaya Upah & Tenaga Kerja Tukang', 'amount' => (float) $upahTukang, 'is_auto' => true];
-        }
-        if ($operasionalLapangan > 0) {
-            $aktivaBiaya[] = ['code' => 'B.OP', 'name' => 'Biaya Operasional & Konsumsi Lapangan', 'amount' => (float) $operasionalLapangan, 'is_auto' => true];
-        }
-        if ($sewaAlat > 0) {
-            $aktivaBiaya[] = ['code' => 'B.SW', 'name' => 'Biaya Sewa Alat & Mesin Proyek', 'amount' => (float) $sewaAlat, 'is_auto' => true];
-        }
-        if ($biayaPakaiMaterial > 0) {
-            $aktivaBiaya[] = ['code' => 'B.PM', 'name' => 'Biaya Pemakaian Material Lapangan', 'amount' => (float) $biayaPakaiMaterial, 'is_auto' => true];
-        }
-        if ($biayaUmum > 0) {
-            $aktivaBiaya[] = ['code' => 'B.UM', 'name' => 'Biaya Administrasi & Umum Pos', 'amount' => (float) $biayaUmum, 'is_auto' => true];
-        }
-        if ($otherExpense > 0) {
-            $aktivaBiaya[] = ['code' => 'B.LN', 'name' => 'Biaya Operasional Lainnya', 'amount' => (float) $otherExpense, 'is_auto' => true];
-        }
 
         $passivaKewajiban = [
             ['code' => 'H.U', 'name' => 'Kewajiban Hutang ke Pihak Lain', 'amount' => (float) $sisaHutang, 'is_auto' => true],
@@ -317,7 +282,11 @@ class ReportController extends Controller
         foreach ($customItems as $ci) {
             $matchedTxAmount = (float) PosTransaction::where('category_id', $categoryId)
                 ->where(function ($q) use ($ci) {
-                    $q->where('category_tx_type', $ci->code)->orWhere('category_tx_type', $ci->name);
+                    $q->where('category_tx_type', $ci->code)
+                      ->orWhere('category_tx_type', $ci->name);
+                    if (strtoupper($ci->code) === 'M' || stripos($ci->name, 'material') !== false) {
+                        $q->orWhere('category_tx_type', 'belanja_material');
+                    }
                 })->sum('amount');
 
             $currentAmount = (float) $ci->amount_current_month + $matchedTxAmount;
