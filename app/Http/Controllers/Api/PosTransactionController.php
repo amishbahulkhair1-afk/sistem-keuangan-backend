@@ -66,11 +66,11 @@ class PosTransactionController extends Controller
         $txDate = $request->transaction_date ? Carbon::parse($request->transaction_date)->toDateString() : Carbon::today()->toDateString();
         $catType = $request->category_tx_type ?: 'operasional_lapangan';
 
-        // Auto determine cashflow type if debt/credit
+        // Auto determine cashflow type if debt/credit or specific category
         $txType = $request->type ?: 'expense';
-        if (in_array($catType, ['hutang_pinjam', 'piutang_bayar'])) {
+        if (in_array($catType, ['hutang_pinjam', 'piutang_bayar', 'donasi_langsung', 'alokasi_pusat', 'pendapatan_pos_langsung'])) {
             $txType = 'income';
-        } elseif (in_array($catType, ['hutang_bayar', 'piutang_pinjam', 'belanja_material'])) {
+        } elseif (in_array($catType, ['hutang_bayar', 'piutang_pinjam', 'belanja_material', 'upah_tukang', 'operasional_lapangan', 'sewa_alat', 'biaya_umum', 'biaya_lainnya'])) {
             $txType = 'expense';
         }
 
