@@ -25,6 +25,17 @@ class AuthController extends Controller
             }
         }
 
+        $role = $user->role ?? 'admin_keuangan';
+        $isAdminOrPimpinan = in_array($role, ['admin', 'admin_keuangan', 'pimpinan']);
+        $clientPlatform = $request->header('X-Client-Platform') ?? $request->input('client');
+
+        // Jika login dilakukan dari portal web (desktop atau mobile web), tolak selain admin dan pimpinan
+        if ($clientPlatform === 'web' && !$isAdminOrPimpinan) {
+            return response()->json([
+                'detail' => 'Akses Ditolak: Portal web (desktop & mobile) hanya dapat diakses oleh Admin dan Pimpinan. Petugas lapangan wajib login melalui aplikasi Android (APK Donasi Latee).'
+            ], 403);
+        }
+
         $assignedCatsList = [];
         if (!empty($user->assigned_categories)) {
             $decoded = json_decode($user->assigned_categories, true);
