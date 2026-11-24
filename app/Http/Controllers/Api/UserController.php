@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ProgramCategory;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 
 class UserController extends Controller
@@ -147,5 +148,34 @@ class UserController extends Controller
         $user = User::findOrFail($id);
         $user->delete();
         return response()->json(['message' => 'Petugas berhasil dihapus']);
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+        ], [
+            'ids.required' => 'Daftar ID pengguna tidak boleh kosong',
+            'ids.array' => 'Format ID pengguna tidak valid',
+        ]);
+
+        $ids = $request->input('ids', []);
+        $currentUserId = auth()->id();
+        $deletedCount = 0;
+
+        DB::transaction(function () use ($ids, $currentUserId, &$deletedCount) {
+            $users = User::whereIn('id', $ids)->where('id', '!=', $currentUserId)->get();
+            foreach ($users as $user) {
+                $user->delete();
+                $deletedCount++;
+            }
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "{$deletedCount} pengguna berhasil dihapus",
+            'deleted_count' => $deletedCount,
+        ]);
     }
 }

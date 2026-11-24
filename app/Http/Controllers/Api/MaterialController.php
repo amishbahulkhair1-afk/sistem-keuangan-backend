@@ -5,11 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\MaterialItem;
 use App\Models\MaterialTransaction;
+use App\Traits\HandlesSecureUploads;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class MaterialController extends Controller
 {
+    use HandlesSecureUploads;
     public function index(Request $request)
     {
         $categoryId = $request->query('category_id');
@@ -105,6 +108,34 @@ class MaterialController extends Controller
         return response()->json(['message' => 'Material berhasil dihapus']);
     }
 
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+        ], [
+            'ids.required' => 'Daftar ID material tidak boleh kosong',
+            'ids.array' => 'Format ID material tidak valid',
+        ]);
+
+        $ids = $request->input('ids', []);
+        $deletedCount = 0;
+
+        DB::transaction(function () use ($ids, &$deletedCount) {
+            $items = MaterialItem::whereIn('id', $ids)->get();
+            foreach ($items as $item) {
+                $item->delete();
+                $deletedCount++;
+            }
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "{$deletedCount} item material berhasil dihapus",
+            'deleted_count' => $deletedCount,
+        ]);
+    }
+
     public function transactions(Request $request)
     {
         $categoryId = $request->query('category_id');
@@ -149,38 +180,38 @@ class MaterialController extends Controller
             'quantity' => 'required|numeric',
         ]);
 
+        $this->validateSecureFile($request, 'photo');
+
         $m = MaterialItem::findOrFail($validated['material_id']);
         $txDate = $request->transaction_date ? Carbon::parse($request->transaction_date)->toDateString() : Carbon::today()->toDateString();
         $qty = (float) $validated['quantity'];
         $unitPrice = (float) ($request->unit_price ?? $m->unit_price);
         $totalPrice = $qty * $unitPrice;
 
-        $photoPath = null;
-        if ($request->hasFile('photo')) {
-            $file = $request->file('photo');
-            $filename = 'mat_' . date('Ymd_His') . '_' . $file->getClientOriginalName();
-            $file->move(public_path('uploads'), $filename);
-            $photoPath = public_path('uploads/' . $filename);
-        }
+        $photoPath = $this->uploadSecureFile($request->file('photo'), 'mat');
 
-        $mt = MaterialTransaction::create([
-            'material_id' => $m->id,
-            'category_id' => $validated['category_id'],
-            'transaction_date' => $txDate,
-            'type' => $validated['type'],
-            'quantity' => $qty,
-            'unit_price' => $unitPrice,
-            'total_price' => $totalPrice,
-            'supplier_or_source' => $request->supplier_or_source,
-            'usage_for' => $request->usage_for,
-            'photo_path' => $photoPath,
-        ]);
+        $mt = DB::transaction(function () use ($m, $validated, $txDate, $qty, $unitPrice, $totalPrice, $request, $photoPath) {
+            $createdMt = MaterialTransaction::create([
+                'material_id' => $m->id,
+                'category_id' => $validated['category_id'],
+                'transaction_date' => $txDate,
+                'type' => $validated['type'],
+                'quantity' => $qty,
+                'unit_price' => $unitPrice,
+                'total_price' => $totalPrice,
+                'supplier_or_source' => $request->supplier_or_source,
+                'usage_for' => $request->usage_for,
+                'photo_path' => $photoPath,
+            ]);
 
-        if ($validated['type'] === 'masuk') {
-            $m->increment('current_stock', $qty);
-        } else {
-            $m->decrement('current_stock', $qty);
-        }
+            if ($validated['type'] === 'masuk') {
+                $m->increment('current_stock', $qty);
+            } else {
+                $m->decrement('current_stock', $qty);
+            }
+
+            return $createdMt;
+        });
 
         $msg = $validated['type'] === 'masuk'
             ? 'Penerimaan material berhasil dicatat'
@@ -196,14 +227,56 @@ class MaterialController extends Controller
     {
         $mt = MaterialTransaction::findOrFail($id);
         $m = MaterialItem::find($mt->material_id);
-        if ($m) {
-            if ($mt->type === 'masuk') {
-                $m->decrement('current_stock', $mt->quantity);
-            } else {
-                $m->increment('current_stock', $mt->quantity);
+
+        DB::transaction(function () use ($mt, $m) {
+            if ($m) {
+                if ($mt->type === 'masuk') {
+                    $m->decrement('current_stock', $mt->quantity);
+                } else {
+                    $m->increment('current_stock', $mt->quantity);
+                }
             }
-        }
-        $mt->delete();
+            $this->deleteSecureFile($mt->photo_path);
+            $mt->delete();
+        });
+
         return response()->json(['message' => 'Transaksi material berhasil dihapus']);
+    }
+
+    public function bulkDestroyTransactions(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+        ], [
+            'ids.required' => 'Daftar ID transaksi material tidak boleh kosong',
+            'ids.array' => 'Format ID transaksi material tidak valid',
+        ]);
+
+        $ids = $request->input('ids', []);
+        $deletedCount = 0;
+
+        DB::transaction(function () use ($ids, &$deletedCount) {
+            $txs = MaterialTransaction::whereIn('id', $ids)->get();
+            foreach ($txs as $mt) {
+                $m = MaterialItem::find($mt->material_id);
+                if ($m) {
+                    if ($mt->type === 'masuk') {
+                        $m->decrement('current_stock', $mt->quantity);
+                    } else {
+                        $m->increment('current_stock', $mt->quantity);
+                    }
+                }
+                $this->deleteSecureFile($mt->photo_path);
+                $mt->delete();
+                $deletedCount++;
+            }
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "{$deletedCount} transaksi material berhasil dihapus",
+            'deleted_count' => $deletedCount,
+        ]);
     }
 }

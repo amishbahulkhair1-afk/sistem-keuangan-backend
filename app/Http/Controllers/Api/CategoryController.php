@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\ProgramCategory;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class CategoryController extends Controller
 {
@@ -16,6 +17,7 @@ class CategoryController extends Controller
             'code' => $c->code,
             'name' => $c->name,
             'qris_unit_digit' => $c->qris_unit_digit,
+            'qris_digit' => $c->qris_unit_digit,
             'category_type' => $c->category_type ?? 'proyek_pembangunan',
             'pic_name' => $c->pic_name,
             'description' => $c->description,
@@ -45,11 +47,17 @@ class CategoryController extends Controller
         $validated = $request->validate([
             'name' => 'required|string',
             'qris_unit_digit' => 'nullable|string',
+            'qris_digit' => 'nullable|string',
             'category_type' => 'nullable|string',
             'pic_name' => 'nullable|string',
             'description' => 'nullable|string',
             'is_active' => 'nullable|boolean',
         ]);
+
+        if (array_key_exists('qris_digit', $validated) && empty($validated['qris_unit_digit'])) {
+            $validated['qris_unit_digit'] = $validated['qris_digit'];
+        }
+        unset($validated['qris_digit']);
 
         $category->update($validated);
         return response()->json($category);
@@ -60,5 +68,33 @@ class CategoryController extends Controller
         $category = ProgramCategory::findOrFail($id);
         $category->delete();
         return response()->json(['message' => 'Pos program berhasil dihapus']);
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+        ], [
+            'ids.required' => 'Daftar ID pos program tidak boleh kosong',
+            'ids.array' => 'Format ID pos program tidak valid',
+        ]);
+
+        $ids = $request->input('ids', []);
+        $deletedCount = 0;
+
+        DB::transaction(function () use ($ids, &$deletedCount) {
+            $cats = ProgramCategory::whereIn('id', $ids)->get();
+            foreach ($cats as $cat) {
+                $cat->delete();
+                $deletedCount++;
+            }
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "{$deletedCount} pos program berhasil dihapus",
+            'deleted_count' => $deletedCount,
+        ]);
     }
 }

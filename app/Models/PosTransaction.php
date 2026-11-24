@@ -15,6 +15,8 @@ class PosTransaction extends Model
         'type',
         'category_tx_type',
         'source_transaction_id',
+        'source_debt_tx_id',
+        'payment_status',
         'amount',
         'recipient_or_sender',
         'description',
@@ -34,5 +36,10 @@ class PosTransaction extends Model
     public function sourceTransaction()
     {
         return $this->belongsTo(Transaction::class, 'source_transaction_id');
+    }
+
+    public function sourceDebtTransaction()
+    {
+        return $this->belongsTo(DebtTransaction::class, 'source_debt_tx_id');
     }
 }

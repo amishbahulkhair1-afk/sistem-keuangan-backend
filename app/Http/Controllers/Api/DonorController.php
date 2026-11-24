@@ -7,6 +7,7 @@ use App\Models\Donor;
 use App\Models\ProgramCategory;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class DonorController extends Controller
 {
@@ -162,5 +163,45 @@ class DonorController extends Controller
         }
         $donor->delete();
         return response()->json(['message' => "Donatur berhasil dihapus"]);
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+        ], [
+            'ids.required' => 'Daftar ID donatur tidak boleh kosong',
+            'ids.array' => 'Format ID donatur tidak valid',
+        ]);
+
+        $ids = $request->input('ids', []);
+        $deletedCount = 0;
+        $skippedCount = 0;
+
+        DB::transaction(function () use ($ids, &$deletedCount, &$skippedCount) {
+            $donors = Donor::whereIn('id', $ids)->get();
+            foreach ($donors as $donor) {
+                $txCount = Transaction::where('donor_id', $donor->id)->count();
+                if ($txCount > 0) {
+                    $skippedCount++;
+                    continue;
+                }
+                $donor->delete();
+                $deletedCount++;
+            }
+        });
+
+        $msg = "{$deletedCount} donatur berhasil dihapus";
+        if ($skippedCount > 0) {
+            $msg .= " ({$skippedCount} dilewati karena memiliki riwayat transaksi)";
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => $msg,
+            'deleted_count' => $deletedCount,
+            'skipped_count' => $skippedCount,
+        ]);
     }
 }

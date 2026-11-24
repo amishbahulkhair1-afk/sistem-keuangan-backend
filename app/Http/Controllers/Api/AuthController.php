@@ -19,10 +19,7 @@ class AuthController extends Controller
         $user = User::with('assignedCategory')->where('email', $request->email)->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
-            // Also allow plain check for legacy testing if hash check fails
-            if (!$user || $user->password !== $request->password) {
-                return response()->json(['detail' => 'Email atau password salah'], 401);
-            }
+            return response()->json(['detail' => 'Email atau password salah'], 401);
         }
 
         $role = $user->role ?? 'admin_keuangan';
@@ -70,5 +67,45 @@ class AuthController extends Controller
                 'assigned_category_name' => $user->assignedCategory?->name,
             ],
         ]);
+    }
+
+    public function me(Request $request)
+    {
+        $user = $request->user()->load('assignedCategory');
+        $assignedCatsList = [];
+        if (!empty($user->assigned_categories)) {
+            $decoded = json_decode($user->assigned_categories, true);
+            if (is_array($decoded)) {
+                $assignedCatsList = $decoded;
+            } else {
+                $parts = explode(',', $user->assigned_categories);
+                foreach ($parts as $p) {
+                    $trimmed = trim($p);
+                    if (is_numeric($trimmed)) {
+                        $assignedCatsList[] = (int) $trimmed;
+                    }
+                }
+            }
+        } elseif ($user->assigned_category_id) {
+            $assignedCatsList = [$user->assigned_category_id];
+        }
+
+        return response()->json([
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role ?? 'admin_keuangan',
+            'access_level' => $user->access_level ?? 'full',
+            'assigned_category_id' => $user->assigned_category_id,
+            'assigned_categories' => $assignedCatsList,
+            'assigned_category_code' => $user->assignedCategory?->code,
+            'assigned_category_name' => $user->assignedCategory?->name,
+        ]);
+    }
+
+    public function logout(Request $request)
+    {
+        $request->user()?->currentAccessToken()?->delete();
+        return response()->json(['message' => 'Berhasil logout']);
     }
 }

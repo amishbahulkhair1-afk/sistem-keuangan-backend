@@ -7,11 +7,14 @@ use App\Models\DebtTransaction;
 use App\Models\MaterialItem;
 use App\Models\MaterialTransaction;
 use App\Models\PosTransaction;
+use App\Traits\HandlesSecureUploads;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class PosTransactionController extends Controller
 {
+    use HandlesSecureUploads;
     public function index(Request $request)
     {
         $categoryId = $request->query('category_id');
@@ -42,6 +45,8 @@ class PosTransactionController extends Controller
                 'transaction_date' => $t->transaction_date ? $t->transaction_date->format('Y-m-d') : '-',
                 'type' => $t->type,
                 'category_tx_type' => $t->category_tx_type,
+                'payment_status' => $t->payment_status ?: 'lunas',
+                'source_debt_tx_id' => $t->source_debt_tx_id,
                 'source_transaction_id' => $t->source_transaction_id,
                 'amount' => (float) $t->amount,
                 'recipient_or_sender' => $t->recipient_or_sender ?: '-',
@@ -62,6 +67,8 @@ class PosTransactionController extends Controller
             'category_id' => 'required|integer',
             'amount' => 'nullable|numeric',
         ]);
+
+        $this->validateSecureFile($request, 'receipt_photo');
 
         $txDate = $request->transaction_date ? Carbon::parse($request->transaction_date)->toDateString() : Carbon::today()->toDateString();
         $catType = $request->category_tx_type ?: 'operasional_lapangan';
@@ -88,118 +95,135 @@ class PosTransactionController extends Controller
             $finalDesc = trim("Beli {$mName}{$mBrand}{$mQty}{$mUnit}");
         }
 
-        $photoPath = null;
-        if ($request->hasFile('receipt_photo')) {
-            $file = $request->file('receipt_photo');
-            $filename = 'pos_' . date('Ymd_His') . '_' . $file->getClientOriginalName();
-            $file->move(public_path('uploads'), $filename);
-            $photoPath = public_path('uploads/' . $filename);
-        }
+        $photoPath = $this->uploadSecureFile($request->file('receipt_photo'), 'pos');
 
-        $pt = PosTransaction::create([
-            'category_id' => $request->category_id,
-            'transaction_date' => $txDate,
-            'type' => $txType,
-            'category_tx_type' => $catType,
-            'amount' => $finalAmount,
-            'recipient_or_sender' => $request->recipient_or_sender ? trim($request->recipient_or_sender) : null,
-            'description' => !empty($finalDesc) ? $finalDesc : null,
-            'receipt_photo_path' => $photoPath,
-        ]);
+        $pt = DB::transaction(function () use ($request, $txDate, $txType, $catType, $finalAmount, $finalDesc, $photoPath) {
+            $paymentStatus = $request->payment_status ?: 'lunas';
 
-        // 1. Sync to DebtTransaction if applicable
-        if (in_array($catType, ['hutang_pinjam', 'hutang_bayar', 'piutang_pinjam', 'piutang_bayar'])) {
-            $party = $request->recipient_or_sender ? trim($request->recipient_or_sender) : 'Pihak Terkait';
-            DebtTransaction::create([
+            $createdPt = PosTransaction::create([
                 'category_id' => $request->category_id,
                 'transaction_date' => $txDate,
-                'type' => $catType,
-                'party_name' => $party,
+                'type' => $txType,
+                'category_tx_type' => $catType,
+                'payment_status' => $paymentStatus,
                 'amount' => $finalAmount,
+                'recipient_or_sender' => $request->recipient_or_sender ? trim($request->recipient_or_sender) : null,
                 'description' => !empty($finalDesc) ? $finalDesc : null,
-                'source_pos_tx_id' => $pt->id,
+                'receipt_photo_path' => $photoPath,
             ]);
-        }
 
-        // 2. Material linkage if material provided
-        $matToRecord = null;
-        if ($request->material_id) {
-            $matToRecord = MaterialItem::find($request->material_id);
-        } elseif (!empty($request->material_name)) {
-            $rawName = trim($request->material_name);
-            $rawBrand = $request->material_brand ? trim($request->material_brand) : '';
-            $fullDisplayName = preg_replace('/\s+/', ' ', trim($rawName . ' ' . $rawBrand));
+            // 1. Sync to DebtTransaction if applicable
+            $isDirectDebt = in_array($catType, ['hutang_pinjam', 'hutang_bayar', 'piutang_pinjam', 'piutang_bayar']);
+            $isExpenseHutang = ($txType === 'expense' && $paymentStatus === 'hutang');
 
-            $existingMats = MaterialItem::where('category_id', $request->category_id)->get();
-            $matched = null;
-            foreach ($existingMats as $em) {
-                if (strcasecmp(trim($em->name), $fullDisplayName) === 0 || strcasecmp(trim($em->name), $rawName) === 0) {
-                    $matched = $em;
-                    break;
-                }
+            if ($isDirectDebt) {
+                $party = $request->recipient_or_sender ? trim($request->recipient_or_sender) : 'Pihak Terkait';
+                $dt = DebtTransaction::create([
+                    'category_id' => $request->category_id,
+                    'transaction_date' => $txDate,
+                    'type' => $catType,
+                    'party_name' => $party,
+                    'amount' => $finalAmount,
+                    'description' => !empty($finalDesc) ? $finalDesc : null,
+                    'source_pos_tx_id' => $createdPt->id,
+                ]);
+                $createdPt->update(['source_debt_tx_id' => $dt->id]);
+            } elseif ($isExpenseHutang) {
+                $party = $request->recipient_or_sender ? trim($request->recipient_or_sender) : 'Toko / Pihak Terkait';
+                $dt = DebtTransaction::create([
+                    'category_id' => $request->category_id,
+                    'transaction_date' => $txDate,
+                    'type' => 'hutang_pinjam',
+                    'party_name' => $party,
+                    'amount' => $finalAmount,
+                    'description' => 'Hutang Belanja: ' . (!empty($finalDesc) ? $finalDesc : ucwords(str_replace('_', ' ', $catType))),
+                    'source_pos_tx_id' => $createdPt->id,
+                ]);
+                $createdPt->update(['source_debt_tx_id' => $dt->id]);
             }
 
-            if ($matched) {
-                $matToRecord = $matched;
-            } else {
-                $words = explode(' ', $fullDisplayName);
-                $baseCode = '';
-                foreach ($words as $w) {
-                    if (!empty($w)) {
-                        $baseCode .= strtoupper($w[0]);
+            // 2. Material linkage if material provided
+            $matToRecord = null;
+            if ($request->material_id) {
+                $matToRecord = MaterialItem::find($request->material_id);
+            } elseif (!empty($request->material_name)) {
+                $rawName = trim($request->material_name);
+                $rawBrand = $request->material_brand ? trim($request->material_brand) : '';
+                $fullDisplayName = preg_replace('/\s+/', ' ', trim($rawName . ' ' . $rawBrand));
+
+                $existingMats = MaterialItem::where('category_id', $request->category_id)->get();
+                $matched = null;
+                foreach ($existingMats as $em) {
+                    if (strcasecmp(trim($em->name), $fullDisplayName) === 0 || strcasecmp(trim($em->name), $rawName) === 0) {
+                        $matched = $em;
+                        break;
                     }
                 }
-                $baseCode = substr($baseCode ?: 'MAT', 0, 4);
 
-                $existingCodes = $existingMats->pluck('code')->map(fn ($c) => strtoupper($c))->toArray();
-                $matCode = $baseCode;
-                $counter = 1;
-                while (in_array($matCode, $existingCodes)) {
-                    $matCode = $baseCode . $counter;
-                    $counter++;
+                if ($matched) {
+                    $matToRecord = $matched;
+                } else {
+                    $words = explode(' ', $fullDisplayName);
+                    $baseCode = '';
+                    foreach ($words as $w) {
+                        if (!empty($w)) {
+                            $baseCode .= strtoupper($w[0]);
+                        }
+                    }
+                    $baseCode = substr($baseCode ?: 'MAT', 0, 4);
+
+                    $existingCodes = $existingMats->pluck('code')->map(fn ($c) => strtoupper($c))->toArray();
+                    $matCode = $baseCode;
+                    $counter = 1;
+                    while (in_array($matCode, $existingCodes)) {
+                        $matCode = $baseCode . $counter;
+                        $counter++;
+                    }
+
+                    $unitVal = $request->material_unit ? trim($request->material_unit) : 'Pcs';
+                    $unitPVal = (float) ($request->material_price ?? 0);
+                    if ($unitPVal <= 0 && $request->material_quantity && (float) $request->material_quantity > 0) {
+                        $unitPVal = $finalAmount / (float) $request->material_quantity;
+                    }
+
+                    $matToRecord = MaterialItem::create([
+                        'category_id' => $request->category_id,
+                        'code' => $matCode,
+                        'name' => $fullDisplayName,
+                        'unit' => $unitVal,
+                        'unit_price' => $unitPVal,
+                        'initial_stock' => 0,
+                        'current_stock' => 0,
+                    ]);
                 }
+            }
 
-                $unitVal = $request->material_unit ? trim($request->material_unit) : 'Pcs';
-                $unitPVal = (float) ($request->material_price ?? 0);
-                if ($unitPVal <= 0 && $request->material_quantity && (float) $request->material_quantity > 0) {
-                    $unitPVal = $finalAmount / (float) $request->material_quantity;
-                }
+            if ($matToRecord) {
+                $qty = (float) ($request->material_quantity ?? 1.0);
+                $unitP = ($qty > 0 && $finalAmount > 0) ? ($finalAmount / $qty) : ((float) ($request->material_price ?? $matToRecord->unit_price));
 
-                $matToRecord = MaterialItem::create([
+                MaterialTransaction::create([
+                    'material_id' => $matToRecord->id,
                     'category_id' => $request->category_id,
-                    'code' => $matCode,
-                    'name' => $fullDisplayName,
-                    'unit' => $unitVal,
-                    'unit_price' => $unitPVal,
-                    'initial_stock' => 0,
-                    'current_stock' => 0,
+                    'transaction_date' => $txDate,
+                    'type' => 'masuk',
+                    'quantity' => $qty,
+                    'unit_price' => $unitP,
+                    'total_price' => $finalAmount > 0 ? $finalAmount : ($qty * $unitP),
+                    'supplier_or_source' => $request->recipient_or_sender ? trim($request->recipient_or_sender) : null,
+                    'usage_for' => "Pembelian material via Kas Pos (" . ($request->description ?: $matToRecord->name) . ")",
+                    'source_pos_tx_id' => $createdPt->id,
+                    'photo_path' => $photoPath,
                 ]);
+
+                $matToRecord->increment('current_stock', $qty);
+                if ($unitP > 0) {
+                    $matToRecord->update(['unit_price' => $unitP]);
+                }
             }
-        }
 
-        if ($matToRecord) {
-            $qty = (float) ($request->material_quantity ?? 1.0);
-            $unitP = ($qty > 0 && $finalAmount > 0) ? ($finalAmount / $qty) : ((float) ($request->material_price ?? $matToRecord->unit_price));
-
-            MaterialTransaction::create([
-                'material_id' => $matToRecord->id,
-                'category_id' => $request->category_id,
-                'transaction_date' => $txDate,
-                'type' => 'masuk',
-                'quantity' => $qty,
-                'unit_price' => $unitP,
-                'total_price' => $finalAmount > 0 ? $finalAmount : ($qty * $unitP),
-                'supplier_or_source' => $request->recipient_or_sender ? trim($request->recipient_or_sender) : null,
-                'usage_for' => "Pembelian material via Kas Pos (" . ($request->description ?: $matToRecord->name) . ")",
-                'source_pos_tx_id' => $pt->id,
-                'photo_path' => $photoPath,
-            ]);
-
-            $matToRecord->increment('current_stock', $qty);
-            if ($unitP > 0) {
-                $matToRecord->update(['unit_price' => $unitP]);
-            }
-        }
+            return $createdPt;
+        });
 
         return response()->json([
             'id' => $pt->id,
@@ -211,25 +235,80 @@ class PosTransactionController extends Controller
     {
         $pt = PosTransaction::findOrFail($id);
 
-        // Delete linked debt entry
-        DebtTransaction::where('source_pos_tx_id', $id)->delete();
-
-        // Rollback material entry
-        $matTxs = MaterialTransaction::where('source_pos_tx_id', $id)->get();
-        foreach ($matTxs as $mt) {
-            $m = MaterialItem::find($mt->material_id);
-            if ($m) {
-                if ($mt->type === 'masuk') {
-                    $m->decrement('current_stock', $mt->quantity);
-                } else {
-                    $m->increment('current_stock', $mt->quantity);
-                }
+        DB::transaction(function () use ($pt, $id) {
+            // Delete linked debt entry
+            DebtTransaction::where('source_pos_tx_id', $id)->delete();
+            if ($pt->source_debt_tx_id) {
+                DebtTransaction::where('id', $pt->source_debt_tx_id)->delete();
             }
-            $mt->delete();
-        }
 
-        $pt->delete();
+            // Rollback material entry
+            $matTxs = MaterialTransaction::where('source_pos_tx_id', $id)->get();
+            foreach ($matTxs as $mt) {
+                $m = MaterialItem::find($mt->material_id);
+                if ($m) {
+                    if ($mt->type === 'masuk') {
+                        $m->decrement('current_stock', $mt->quantity);
+                    } else {
+                        $m->increment('current_stock', $mt->quantity);
+                    }
+                }
+                $mt->delete();
+            }
+
+            $this->deleteSecureFile($pt->receipt_photo_path);
+            $pt->delete();
+        });
 
         return response()->json(['message' => 'Transaksi pos berhasil dihapus']);
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+        ], [
+            'ids.required' => 'Daftar ID transaksi pos tidak boleh kosong',
+            'ids.array' => 'Format ID transaksi pos tidak valid',
+        ]);
+
+        $ids = $request->input('ids', []);
+        $deletedCount = 0;
+
+        DB::transaction(function () use ($ids, &$deletedCount) {
+            $pts = PosTransaction::whereIn('id', $ids)->get();
+            foreach ($pts as $pt) {
+                // Delete linked debt entry
+                DebtTransaction::where('source_pos_tx_id', $pt->id)->delete();
+                if ($pt->source_debt_tx_id) {
+                    DebtTransaction::where('id', $pt->source_debt_tx_id)->delete();
+                }
+
+                // Rollback material entry
+                $matTxs = MaterialTransaction::where('source_pos_tx_id', $pt->id)->get();
+                foreach ($matTxs as $mt) {
+                    $m = MaterialItem::find($mt->material_id);
+                    if ($m) {
+                        if ($mt->type === 'masuk') {
+                            $m->decrement('current_stock', $mt->quantity);
+                        } else {
+                            $m->increment('current_stock', $mt->quantity);
+                        }
+                    }
+                    $mt->delete();
+                }
+
+                $this->deleteSecureFile($pt->receipt_photo_path);
+                $pt->delete();
+                $deletedCount++;
+            }
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "{$deletedCount} transaksi pos berhasil dihapus",
+            'deleted_count' => $deletedCount,
+        ]);
     }
 }
