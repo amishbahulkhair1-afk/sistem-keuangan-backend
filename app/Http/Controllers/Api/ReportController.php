@@ -175,9 +175,13 @@ class ReportController extends Controller
                 'pos_id' => $c->id,
                 'pos_code' => $c->code,
                 'pos_name' => $c->name,
+                'nama_pos' => $c->name,
                 'saldo_lalu' => $saldoLalu,
+                'saldo_bulan_lalu' => $saldoLalu,
                 'mutasi_masuk' => $incIni,
+                'mutasi_masuk_bulan_ini' => $incIni,
                 'mutasi_keluar' => $expIni,
+                'mutasi_keluar_bulan_ini' => $expIni,
                 'saldo_ini' => $saldoIni,
                 'saldo_akhir' => $saldoAkhir,
             ];
@@ -272,7 +276,7 @@ class ReportController extends Controller
             }
         }
 
-        // 3. Piutang
+        // 3. Piutang (Termasuk Harta Lancar)
         $piutangAcc = $accounts->first(fn ($a) => $a->code === 'piutang' || stripos($a->name, 'piutang') !== false);
         $piutangSaldo = (float) ($piutangAcc ? $piutangAcc->current_balance : 0) + $sisaPiutang;
         $aktivaHartaLancar[] = [
@@ -303,7 +307,7 @@ class ReportController extends Controller
         }
 
         // ==========================================
-        // AKTIVA B: BIAYA-BIAYA TIAP POS PROGRAM
+        // AKTIVA B: PENGELUARAN / REALISASI BIAYA TIAP POS PROGRAM
         // ==========================================
         $aktivaBiaya = [];
 
@@ -361,6 +365,7 @@ class ReportController extends Controller
         // ==========================================
         $passivaKewajiban = [];
 
+        // Kewajiban Hutang ke Pihak Lain
         $passivaKewajiban[] = [
             'id' => null,
             'code' => 'H.U',
@@ -467,7 +472,7 @@ class ReportController extends Controller
             [
                 'code' => 'B',
                 'sub_category' => 'biaya_biaya',
-                'title' => 'B. Biaya-Biaya Tiap Pos Program',
+                'title' => 'B. Realisasi Pengeluaran Tiap Pos Program',
                 'items' => $aktivaBiaya,
                 'subtotal' => (float) $subtotalAktivaB,
             ],

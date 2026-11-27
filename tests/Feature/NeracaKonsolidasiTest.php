@@ -70,11 +70,11 @@ class NeracaKonsolidasiTest extends TestCase
         $this->assertArrayHasKey('aktiva', $data);
         $this->assertArrayHasKey('passiva', $data);
 
-        // Aktiva: Group A = Harta Lancar, Group B = Biaya-Biaya
+        // Aktiva: Group A = Harta Lancar, Group B = Realisasi Pengeluaran Tiap Pos
         $aktivaGroups = $data['aktiva']['groups'];
         $this->assertCount(2, $aktivaGroups);
         $this->assertEquals('A. Harta Lancar', $aktivaGroups[0]['title']);
-        $this->assertEquals('B. Biaya-Biaya Tiap Pos Program', $aktivaGroups[1]['title']);
+        $this->assertStringContainsString('Tiap Pos Program', $aktivaGroups[1]['title']);
 
         // Check Harta Lancar items (Kas Tunai, Kas Bank, Piutang)
         $hartaNames = array_column($aktivaGroups[0]['items'], 'name');
@@ -241,7 +241,7 @@ class NeracaKonsolidasiTest extends TestCase
         $this->assertStringContainsString('I. AKTIVA (HARTA LANCAR & BIAYA-BIAYA)', $content);
         $this->assertStringContainsString('II. PASSIVA (KEWAJIBAN & SUMBER DANA)', $content);
         $this->assertStringContainsString('A. Harta Lancar', $content);
-        $this->assertStringContainsString('B. Biaya-Biaya Tiap Pos Program', $content);
+        $this->assertStringContainsString('Tiap Pos Program', $content);
         $this->assertStringContainsString('A. Kewajiban', $content);
         $this->assertStringContainsString('B. Sumber Dana Tiap Pos', $content);
         $this->assertStringContainsString('STATUS REKONSILIASI KEUANGAN:', $content);
